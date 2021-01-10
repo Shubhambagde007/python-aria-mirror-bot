@@ -27,7 +27,7 @@ Deploying is pretty much straight forward and is divided into several steps as f
 
 - Clone this repo:
 ```
-git clone https://github.com/SVR666/LoaderX-Bot mirror-bot/
+git clone https://github.com/ZyCromerZ/python-aria-mirror-bot mirror-bot/
 cd mirror-bot
 ```
 - Install dependencies for running setup scripts:
