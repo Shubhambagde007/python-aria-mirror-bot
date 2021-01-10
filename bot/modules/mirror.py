@@ -1,12 +1,14 @@
 import requests
 from telegram.ext import CommandHandler, run_async
+from telegram import InlineKeyboardMarkup
 
-from bot import Interval, INDEX_URL,LOGGER
+from bot import Interval, INDEX_URL
 from bot import dispatcher, DOWNLOAD_DIR, DOWNLOAD_STATUS_UPDATE_INTERVAL, download_dict, download_dict_lock
 from bot.helper.ext_utils import fs_utils, bot_utils
 from bot.helper.ext_utils.bot_utils import setInterval
 from bot.helper.ext_utils.exceptions import DirectDownloadLinkException, NotSupportedExtractionArchive
 from bot.helper.mirror_utils.download_utils.aria2_download import AriaDownloadHelper
+from bot.helper.mirror_utils.download_utils.mega_downloader import MegaDownloadHelper
 from bot.helper.mirror_utils.download_utils.direct_link_generator import direct_link_generator
 from bot.helper.mirror_utils.download_utils.telegram_downloader import TelegramDownloadHelper
 from bot.helper.mirror_utils.status_utils import listeners
@@ -17,6 +19,7 @@ from bot.helper.mirror_utils.upload_utils import gdriveTools
 from bot.helper.telegram_helper.bot_commands import BotCommands
 from bot.helper.telegram_helper.filters import CustomFilters
 from bot.helper.telegram_helper.message_utils import *
+from bot.helper.telegram_helper import button_builder
 import pathlib
 import os
 import subprocess
@@ -26,7 +29,7 @@ ariaDlManager = AriaDownloadHelper()
 ariaDlManager.start_listener()
 
 class MirrorListener(listeners.MirrorListeners):
-    def __init__(self, bot, update, isTar=False,tag=None, extract=False):
+    def __init__(self, bot, update, isTar=False, tag=None, extract=False):
         super().__init__(bot, update)
         self.isTar = isTar
         self.tag = tag
@@ -134,22 +137,29 @@ class MirrorListener(listeners.MirrorListeners):
 
     def onUploadComplete(self, link: str):
         with download_dict_lock:
-            msg = f'<a href="{link}">{download_dict[self.uid].name()}</a> ({download_dict[self.uid].size()})'
+            msg = f'<b>Filename : </b><code>{download_dict[self.uid].name()}</code>\n<b>Size : </b><code>{download_dict[self.uid].size()}</code>'
+            buttons = button_builder.ButtonMaker()
+            buttons.buildbutton("⚡Drive Link⚡", link)
             LOGGER.info(f'Done Uploading {download_dict[self.uid].name()}')
             if INDEX_URL is not None:
-                share_url = requests.utils.requote_uri(f'{INDEX_URL}/{download_dict[self.uid].name()}')
+                url_path = requests.utils.quote(f'{download_dict[self.uid].name()}')
+                share_url = f'{INDEX_URL}/{url_path}'
                 if os.path.isdir(f'{DOWNLOAD_DIR}/{self.uid}/{download_dict[self.uid].name()}'):
                     share_url += '/'
-                msg += f'\n\n Shareable link: <a href="{share_url}">here</a>'
-            if self.tag is not None:
-                msg += f'\ncc: @{self.tag}'
+                buttons.buildbutton("💥Index Link💥", share_url)
+            if self.message.from_user.username:
+                uname = f"@{self.message.from_user.username}"
+            else:
+                uname = f'<a href="tg://user?id={self.message.from_user.id}">{self.message.from_user.first_name}</a>'
+            if uname is not None:
+                msg += f'\n\nHey {uname}, your file is uploaded'
             try:
                 fs_utils.clean_download(download_dict[self.uid].path())
             except FileNotFoundError:
                 pass
             del download_dict[self.uid]
             count = len(download_dict)
-        sendMessage(msg, self.bot, self.update)
+        sendMarkup(msg, self.bot, self.update, InlineKeyboardMarkup(buttons.build_menu(2)))
         if count == 0:
             self.clean()
         else:
@@ -169,6 +179,7 @@ class MirrorListener(listeners.MirrorListeners):
             self.clean()
         else:
             update_all_messages()
+
 
 def _mirror(bot, update, isTar=False, extract=False):
     message_args = update.message.text.split(' ')
@@ -212,7 +223,11 @@ def _mirror(bot, update, isTar=False, extract=False):
         LOGGER.info(f'{link}: {e}')
 
     listener = MirrorListener(bot, update, isTar, tag, extract)
-    ariaDlManager.add_download(link, f'{DOWNLOAD_DIR}/{listener.uid}/',listener)
+    if bot_utils.is_mega_link(link):
+        mega_dl = MegaDownloadHelper()
+        mega_dl.add_download(link, f'{DOWNLOAD_DIR}/{listener.uid}/', listener)
+    else:
+        ariaDlManager.add_download(link, f'{DOWNLOAD_DIR}/{listener.uid}/', listener)
     sendStatusMessage(update, bot)
     if len(Interval) == 0:
         Interval.append(setInterval(DOWNLOAD_STATUS_UPDATE_INTERVAL, update_all_messages))
@@ -230,7 +245,7 @@ def tar_mirror(update, context):
 
 @run_async
 def unzip_mirror(update, context):
-    _mirror(context.bot,update, extract=True)
+    _mirror(context.bot, update, extract=True)
 
 
 mirror_handler = CommandHandler(BotCommands.MirrorCommand, mirror,

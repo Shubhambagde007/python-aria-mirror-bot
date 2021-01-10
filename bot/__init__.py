@@ -7,6 +7,13 @@ import aria2p
 import telegram.ext as tg
 from dotenv import load_dotenv
 import socket
+import faulthandler
+faulthandler.enable()
+
+import psycopg2
+from psycopg2 import Error
+
+from telegraph import Telegraph
 
 socket.setdefaulttimeout(600)
 
@@ -19,6 +26,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
                     handlers=[logging.FileHandler('log.txt'), logging.StreamHandler()],
                     level=logging.INFO)
 
+LOGGER = logging.getLogger(__name__)
+
 load_dotenv('config.env')
 
 Interval = []
@@ -27,8 +36,17 @@ Interval = []
 def getConfig(name: str):
     return os.environ[name]
 
-
-LOGGER = logging.getLogger(__name__)
+def mktable():
+    try:
+        conn = psycopg2.connect(DB_URI)
+        cur = conn.cursor()
+        sql = "CREATE TABLE users (uid bigint, sudo boolean DEFAULT FALSE);"
+        cur.execute(sql)
+        conn.commit()
+        LOGGER.info("Table Created!")
+    except Error as e:
+        LOGGER.error(e)
+        exit(1)
 
 try:
     if bool(getConfig('_____REMOVE_THIS_LINE_____')):
@@ -58,15 +76,13 @@ status_reply_dict = {}
 download_dict = {}
 # Stores list of users and chats the bot is authorized to use in
 AUTHORIZED_CHATS = set()
-if os.path.exists('authorized_chats.txt'):
-    with open('authorized_chats.txt', 'r+') as f:
-        lines = f.readlines()
-        for line in lines:
-            #    LOGGER.info(line.split())
-            AUTHORIZED_CHATS.add(int(line.split()[0]))
+SUDO_USERS = set()
+
 try:
     BOT_TOKEN = getConfig('BOT_TOKEN')
+    DB_URI = getConfig('DATABASE_URL')
     parent_id = getConfig('GDRIVE_FOLDER_ID')
+    telegraph_token = getConfig('TELEGRAPH_TOKEN')
     DOWNLOAD_DIR = getConfig('DOWNLOAD_DIR')
     if DOWNLOAD_DIR[-1] != '/' or DOWNLOAD_DIR[-1] != '\\':
         DOWNLOAD_DIR = DOWNLOAD_DIR + '/'
@@ -79,6 +95,42 @@ try:
 except KeyError as e:
     LOGGER.error("One or more env variables missing! Exiting now")
     exit(1)
+
+try:
+    conn = psycopg2.connect(DB_URI)
+    cur = conn.cursor()
+    sql = "SELECT * from users;"
+    cur.execute(sql)
+    rows = cur.fetchall()  #returns a list ==> (uid, sudo)
+    for row in rows:
+        AUTHORIZED_CHATS.add(row[0])
+        if row[1]:
+            SUDO_USERS.add(row[0])
+except Error as e:
+    if 'relation "users" does not exist' in str(e):
+        mktable()
+    else:
+        LOGGER.error(e)
+        exit(1)
+finally:
+    cur.close()
+    conn.close()     
+
+try:
+    MEGA_API_KEY = getConfig('MEGA_API_KEY')
+except KeyError:
+    LOGGER.warning('MEGA API KEY not provided!')
+    MEGA_API_KEY = None
+try:
+    MEGA_EMAIL_ID = getConfig('MEGA_EMAIL_ID')
+    MEGA_PASSWORD = getConfig('MEGA_PASSWORD')
+    if len(MEGA_EMAIL_ID) == 0 or len(MEGA_PASSWORD) == 0:
+        raise KeyError
+except KeyError:
+    LOGGER.warning('MEGA Credentials not provided!')
+    MEGA_EMAIL_ID = None
+    MEGA_PASSWORD = None
+
 try:
     INDEX_URL = getConfig('INDEX_URL')
     if len(INDEX_URL) == 0:
@@ -102,6 +154,8 @@ try:
         USE_SERVICE_ACCOUNTS = False
 except KeyError:
     USE_SERVICE_ACCOUNTS = False
+
+telegra_ph = Telegraph(access_token=telegraph_token)
 
 updater = tg.Updater(token=BOT_TOKEN,use_context=True)
 bot = updater.bot
